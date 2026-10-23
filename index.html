@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ART QUEST 地図</title>
+<style>
+  :root{
+    --gold:#f5c542; --gold-deep:#c99a1e;
+    --sky1:#141838; --sky2:#2b2f63;
+    --lit:#ffd86b; --dark-window:#2a2f55;
+  }
+  html,body{margin:0;height:100%;background:var(--sky1);color:#fff;
+    font-family:"Hiragino Maru Gothic ProN","Zen Maru Gothic","Meiryo",sans-serif;overflow:hidden}
+  header{position:fixed;top:0;left:0;right:0;z-index:5;display:flex;justify-content:space-between;align-items:center;
+    padding:12px 16px;background:linear-gradient(rgba(20,24,56,.95),rgba(20,24,56,0));pointer-events:none}
+  header h1{margin:0;font-size:18px;letter-spacing:.15em}
+  #count{font-weight:bold;color:var(--gold);font-size:16px}
+  #scroller{position:absolute;inset:0;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scroll-behavior:smooth}
+  #town{display:block;height:100%}
+  #hint{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);font-size:13px;opacity:.75;z-index:4;white-space:nowrap}
+
+  .house{cursor:pointer}
+  .house .win{fill:var(--dark-window);transition:fill .8s}
+  .house.lit .win{fill:var(--lit);filter:url(#glow)}
+  .house .keymark{opacity:0;transition:opacity .8s}
+  .house.lit .keymark{opacity:1}
+  .house.just .keymark{animation:pop 1s ease-out}
+  @keyframes pop{0%{transform:scale(0)}60%{transform:scale(1.4)}100%{transform:scale(1)}}
+  .house .keymark{transform-box:fill-box;transform-origin:center}
+
+  /* 宝箱 */
+  #chest{cursor:pointer;transform-box:fill-box;transform-origin:50% 100%}
+  #chest .trim{fill:#7a5230;transition:fill .8s}
+  #chest .spark{opacity:0;transition:opacity .8s}
+  #chest .leak{opacity:0;transition:opacity .8s}
+  #chest .inner{opacity:0}
+  #lid{transform-box:fill-box;transform-origin:50% 100%;transition:transform 1.2s cubic-bezier(.3,1.4,.5,1)}
+  #chest.s1 .spark.a{opacity:1}
+  #chest.s2 .spark{opacity:1} #chest.s2 .trim{fill:var(--gold-deep)}
+  #chest.s3 .spark{opacity:1} #chest.s3 .trim{fill:var(--gold)} #chest.s3 .leak{opacity:.9}
+  #chest.s4 .spark{opacity:1} #chest.s4 .trim{fill:var(--gold)} #chest.s4 .inner{opacity:1}
+  #chest.s4 #lid{transform:translateY(-34px) rotate(-18deg)}
+  #chest.wobble{animation:wobble 2.2s infinite}
+  @keyframes wobble{
+    0%,70%,100%{transform:rotate(0)}
+    74%{transform:rotate(-3deg)} 78%{transform:rotate(3deg)}
+    82%{transform:rotate(-2deg)} 86%{transform:rotate(2deg)} 90%{transform:rotate(0)}
+  }
+  .spark{animation:twinkle 1.6s infinite alternate}
+  @keyframes twinkle{from{filter:brightness(.7)}to{filter:brightness(1.4)}}
+
+  /* トースト */
+  #toast{white-space:nowrap;position:fixed;top:64px;left:50%;transform:translate(-50%,-20px);background:var(--gold);color:#3a2a00;
+    padding:10px 18px;border-radius:999px;font-weight:bold;opacity:0;transition:.4s;z-index:10;pointer-events:none}
+  #toast.show{opacity:1;transform:translate(-50%,0)}
+
+  /* 完成オーバーレイ */
+  #finale{position:fixed;inset:0;background:rgba(10,12,30,.88);display:none;align-items:center;justify-content:center;z-index:20;padding:16px}
+  #finale.show{display:flex}
+  .card{background:#fffaf0;color:#3a2a00;border-radius:18px;max-width:420px;width:100%;padding:24px;text-align:center;
+    box-shadow:0 0 40px rgba(245,197,66,.6)}
+  .card h2{margin:0 0 8px;font-size:22px}
+  .card p{line-height:1.8;font-size:14px}
+  .cal-list{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+  .cal{border:2px solid transparent;border-radius:12px;padding:8px 4px;cursor:pointer;background:#f3e7c9;font-size:12px}
+  .cal .thumb{height:60px;border-radius:8px;margin-bottom:6px}
+  .cal.sel{border-color:var(--gold-deep)}
+  .btn{margin-top:16px;background:var(--gold);border:none;border-radius:999px;padding:10px 24px;font-weight:bold;font-size:15px;cursor:pointer;color:#3a2a00}
+  .btn:disabled{opacity:.4}
+  .close{background:none;border:none;color:#8a7650;margin-top:8px;cursor:pointer;font-size:13px}
+
+  #debug{position:fixed;right:10px;bottom:40px;z-index:30;display:none;gap:6px;flex-direction:column}
+  #debug button{font-size:12px;padding:6px 8px}
+</style>
+</head>
+<body>
+<header><h1>ART QUEST</h1><div id="count">🔑 0 / 15</div></header>
+<div id="scroller"><svg id="town" viewBox="0 0 2560 600" preserveAspectRatio="xMidYMid meet"></svg></div>
+<div id="hint">← 左右にスクロールして街を歩こう →</div>
+<div id="toast"></div>
+
+<div id="finale"><div class="card" id="finaleCard"></div></div>
+
+<div id="debug">
+  <button data-d="14">テスト：14個にする</button>
+  <button data-d="15">テスト：15個にする</button>
+  <button data-d="0">テスト：リセット</button>
+</div>
+
+<script>
+/* ===================== 設定 ===================== */
+// 各ROOMのURL。01から順番に。未公開の部屋は "" のまま。
+// 本番では "https://ユーザー名.github.io/リポジトリ名/" の形に書き換える
+const ROOMS = [
+  "../room01/index.html",
+  "../room02/index.html",
+  "", "", "", "", "", "", "", "", "", "", "", "", ""
+];
+const TOTAL = 15;
+const STORE_KEY = "artquest_keys_v1";
+const CAL_KEY = "artquest_calendar_v1";
+const CALENDARS = [
+  { id:"hoshi",  name:"カレンダーA", bg:"linear-gradient(135deg,#2b2f63,#7b6fd6)" },
+  { id:"sweets", name:"カレンダーB", bg:"linear-gradient(135deg,#ffb6c9,#ffe3a3)" },
+  { id:"forest", name:"カレンダーC", bg:"linear-gradient(135deg,#2f6b4f,#b6e3a3)" }
+];
+const STAGE_TEXT = [
+  "宝箱はまだ眠っている…",
+  "宝箱がかすかに光りはじめた",
+  "宝箱の金具が輝いている",
+  "宝箱から光がもれている！",
+  "宝箱が開いた！"
+];
+
+/* ===================== 保存まわり ===================== */
+function loadKeys(){
+  try{ const a = JSON.parse(localStorage.getItem(STORE_KEY) || "[]");
+       return new Set(Array.isArray(a) ? a.filter(isValidKey) : []); }
+  catch(e){ return new Set(); }
+}
+function saveKeys(set){
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify([...set].sort())); }catch(e){}
+}
+function isValidKey(k){ return /^(0[1-9]|1[0-5])$/.test(k); }
+function pad(n){ return String(n).padStart(2,"0"); }
+
+/* ===================== 街を描く ===================== */
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("town");
+function el(tag, attrs, parent){
+  const e = document.createElementNS(NS, tag);
+  for(const k in attrs) e.setAttribute(k, attrs[k]);
+  if(parent) parent.appendChild(e);
+  return e;
+}
+const GROUND = 480, HW = 110;
+const PALETTE = ["#8e6fb5","#d98b8b","#6f9fb5","#c9a36b","#7fae8a","#b57fa6","#9a8fd0","#d1a06f"];
+const ROOFS   = ["#4a3a6b","#8a3f4f","#3b5a7a","#7a5a2f","#3f6b4f","#6b3f5f","#4f4a8a","#8a5a3f"];
+
+function houseX(i){ return i < 7 ? 60 + i*145 : 1360 + (i-7)*145; }
+
+function drawTown(){
+  const defs = el("defs",{},svg);
+  defs.innerHTML = `
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#141838"/><stop offset="1" stop-color="#2b2f63"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <radialGradient id="leak" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#fff3b0" stop-opacity="1"/><stop offset="1" stop-color="#ffd86b" stop-opacity="0"/>
+    </radialGradient>
+    <symbol id="key" viewBox="0 0 40 20">
+      <circle cx="8" cy="10" r="6.5" fill="none" stroke="#f5c542" stroke-width="3.5"/>
+      <rect x="14" y="8.2" width="24" height="3.6" fill="#f5c542"/>
+      <rect x="30" y="11" width="3.5" height="6" fill="#f5c542"/><rect x="24" y="11" width="3.5" height="4.5" fill="#f5c542"/>
+    </symbol>`;
+  el("rect",{x:0,y:0,width:2560,height:600,fill:"url(#sky)"},svg);
+  // 星
+  for(let i=0;i<70;i++){
+    el("circle",{cx:(i*397)%2560, cy:20+(i*131)%220, r:(i%3)+0.8, fill:"#fff", opacity:.3+(i%5)*.12},svg);
+  }
+  el("circle",{cx:2300,cy:90,r:38,fill:"#fff6d6",opacity:.9},svg); // 月
+  // 地面と広場
+  el("rect",{x:0,y:GROUND,width:2560,height:120,fill:"#1d2147"},svg);
+  el("ellipse",{cx:1200,cy:GROUND+20,rx:170,ry:34,fill:"#3a3f72"},svg);
+
+  for(let i=0;i<TOTAL;i++){
+    const no = pad(i+1), x = houseX(i);
+    const h = 170 + (i*37)%90;
+    const top = GROUND - h;
+    const g = el("g",{class:"house","data-no":no},svg);
+    el("rect",{x, y:top, width:HW, height:h, fill:PALETTE[i%8], rx:4},g);
+    el("polygon",{points:`${x-10},${top} ${x+HW/2},${top-55-(i%3)*12} ${x+HW+10},${top}`, fill:ROOFS[i%8]},g);
+    // 窓
+    el("rect",{class:"win", x:x+18, y:top+24, width:28, height:30, rx:3},g);
+    el("rect",{class:"win", x:x+HW-46, y:top+24, width:28, height:30, rx:3},g);
+    // ドア
+    el("rect",{x:x+HW/2-17, y:GROUND-52, width:34, height:52, rx:14, fill:"#3a2a40"},g);
+    const t = el("text",{x:x+HW/2, y:GROUND-24, "text-anchor":"middle","font-size":14,fill:"#fff","font-weight":"bold"},g);
+    t.textContent = no;
+    // 鍵マーク
+    const km = el("g",{class:"keymark"},g);
+    el("circle",{cx:x+HW/2, cy:GROUND-78, r:17, fill:"#3a2a00", opacity:.6},km);
+    el("use",{href:"#key", x:x+HW/2-15, y:GROUND-86, width:30, height:15},km);
+
+    if(!ROOMS[i]) g.setAttribute("opacity", ".55");
+    g.addEventListener("click", ()=>{
+      if(ROOMS[i]) location.href = ROOMS[i];
+      else toast(`ROOM ${no} は準備中です`);
+    });
+  }
+  drawChest();
+}
+
+function drawChest(){
+  const c = el("g",{id:"chest"},svg);
+  const cx = 1200, base = GROUND+6;
+  // 中の光（開いた時）
+  el("ellipse",{class:"inner", cx, cy:base-70, rx:90, ry:60, fill:"url(#leak)"},c);
+  // 本体
+  el("rect",{x:cx-75, y:base-70, width:150, height:70, rx:6, fill:"#8b5a2b"},c);
+  el("rect",{class:"trim", x:cx-75, y:base-70, width:150, height:10},c);
+  el("rect",{class:"trim", x:cx-80, y:base-70, width:12, height:70},c);
+  el("rect",{class:"trim", x:cx+68, y:base-70, width:12, height:70},c);
+  // すきまの光
+  el("ellipse",{class:"leak", cx, cy:base-70, rx:80, ry:10, fill:"url(#leak)"},c);
+  // ふた
+  const lid = el("g",{id:"lid"},c);
+  el("path",{d:`M${cx-78} ${base-70} L${cx-78} ${base-100} Q${cx} ${base-140} ${cx+78} ${base-100} L${cx+78} ${base-70} Z`, fill:"#9b6634"},lid);
+  el("rect",{class:"trim", x:cx-80, y:base-80, width:160, height:10},lid);
+  el("rect",{class:"trim", x:cx-12, y:base-86, width:24, height:28, rx:4},lid);
+  // きらきら
+  [[-95,-120,"a"],[100,-110,""],[-60,-150,""],[70,-160,"a"],[0,-175,""]].forEach(([dx,dy,k])=>{
+    el("path",{class:"spark "+k, d:`M${cx+dx} ${base+dy-8} L${cx+dx+3} ${base+dy} L${cx+dx} ${base+dy+8} L${cx+dx-3} ${base+dy} Z`, fill:"#fff3b0"},c);
+  });
+  const label = el("text",{id:"chestText", x:cx, y:base+50, "text-anchor":"middle","font-size":16,fill:"#f5e6b8"},svg);
+  c.addEventListener("click", ()=>{
+    const n = loadKeys().size;
+    if(n >= TOTAL) showFinale();
+    else toast(`あと ${TOTAL-n} 個の鍵で宝箱が開くよ`);
+  });
+}
+
+/* ===================== 状態の反映 ===================== */
+function stageOf(n){ return n===0?0 : n<=4?1 : n<=9?2 : n<=14?3 : 4; }
+
+function render(justNo){
+  const keys = loadKeys(), n = keys.size, s = stageOf(n);
+  document.getElementById("count").textContent = `🔑 ${n} / ${TOTAL}`;
+  document.querySelectorAll(".house").forEach(h=>{
+    h.classList.toggle("lit", keys.has(h.dataset.no));
+    h.classList.toggle("just", h.dataset.no === justNo);
+  });
+  const chest = document.getElementById("chest");
+  chest.setAttribute("class", "s"+s + (n === TOTAL-1 ? " wobble" : ""));
+  document.getElementById("chestText").textContent =
+    n === TOTAL-1 ? "あと1個！宝箱がカタカタ揺れている…" : STAGE_TEXT[s];
+}
+
+/* ===================== 画面サイズ ===================== */
+function fit(){
+  svg.style.width = (window.innerHeight * 2560/600) + "px";
+}
+
+/* ===================== トースト ===================== */
+let toastTimer;
+function toast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove("show"), 2600);
+}
+
+/* ===================== スクロール ===================== */
+function scrollToX(svgX, smooth){
+  const sc = document.getElementById("scroller");
+  const px = svgX * (svg.clientWidth/2560) - window.innerWidth/2;
+  sc.style.scrollBehavior = smooth ? "smooth" : "auto";
+  sc.scrollLeft = Math.max(0, px);
+}
+
+/* ===================== 完成 ===================== */
+function showFinale(){
+  let chosen = null;
+  try{ chosen = localStorage.getItem(CAL_KEY); }catch(e){}
+  const card = document.getElementById("finaleCard");
+  card.innerHTML = `
+    <h2>🎉 宝箱が開いた！</h2>
+    <p>15の部屋をめぐって、すべての鍵を集めました。<br>街のみんなから、あなたへのおくりもの。</p>
+    <p><b>好きなカレンダーをひとつ選んでね</b></p>
+    <div class="cal-list">${CALENDARS.map(c=>`
+      <div class="cal ${chosen===c.id?'sel':''}" data-id="${c.id}">
+        <div class="thumb" style="background:${c.bg}"></div>${c.name}
+      </div>`).join("")}
+    </div>
+    <button class="btn" id="decide" ${chosen?'':'disabled'}>これにする</button><br>
+    <button class="close" id="closeFinale">とじる</button>`;
+  card.querySelectorAll(".cal").forEach(c=>c.addEventListener("click",()=>{
+    card.querySelectorAll(".cal").forEach(x=>x.classList.remove("sel"));
+    c.classList.add("sel"); chosen = c.dataset.id;
+    document.getElementById("decide").disabled = false;
+  }));
+  document.getElementById("decide").onclick = ()=>{
+    try{ localStorage.setItem(CAL_KEY, chosen); }catch(e){}
+    const cal = CALENDARS.find(c=>c.id===chosen);
+    card.innerHTML = `<h2>${cal.name}</h2>
+      <div class="thumb" style="height:160px;border-radius:12px;background:${cal.bg}"></div>
+      <p>（試作：ここでダウンロードやリンクを出す予定）</p>
+      <button class="btn" id="closeFinale">地図に戻る</button>`;
+    document.getElementById("closeFinale").onclick = hideFinale;
+  };
+  document.getElementById("closeFinale").onclick = hideFinale;
+  document.getElementById("finale").classList.add("show");
+}
+function hideFinale(){ document.getElementById("finale").classList.remove("show"); }
+
+/* ===================== 起動 ===================== */
+drawTown();
+fit();
+window.addEventListener("resize", fit);
+
+const params = new URLSearchParams(location.search);
+const incoming = params.get("key");
+let justNo = null;
+
+if(incoming !== null){
+  if(isValidKey(incoming)){
+    const keys = loadKeys();
+    const isNew = !keys.has(incoming);
+    keys.add(incoming); saveKeys(keys);
+    justNo = isNew ? incoming : null;
+    toast(isNew ? `🔑 鍵${incoming}を記録しました！` : `鍵${incoming}はもう記録ずみです`);
+  }
+  // URLから ?key= を消す（リロードや共有で残らないように）
+  params.delete("key");
+  const q = params.toString();
+  history.replaceState(null, "", location.pathname + (q ? "?"+q : "") + location.hash);
+}
+
+render(justNo);
+
+// 戻ってきた家を画面の中央に。初回は広場（宝箱）を中央に
+requestAnimationFrame(()=>{
+  if(justNo){ scrollToX(houseX(+justNo-1)+HW/2, false); }
+  else scrollToX(1200, false);
+});
+
+if(justNo && loadKeys().size === TOTAL){
+  setTimeout(()=>{ scrollToX(1200, true); }, 1200);
+  setTimeout(showFinale, 2400);
+}
+
+// テスト用ボタン：地図のURLに ?debug=1 を付けると表示
+if(params.get("debug") === "1"){
+  const d = document.getElementById("debug"); d.style.display = "flex";
+  d.querySelectorAll("button").forEach(b=>b.onclick = ()=>{
+    const n = +b.dataset.d, s = new Set();
+    for(let i=1;i<=n;i++) s.add(pad(i));
+    saveKeys(s); render(null);
+  });
+}
+</script>
+</body>
+</html>
